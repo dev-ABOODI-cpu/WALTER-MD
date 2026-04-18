@@ -1,170 +1,267 @@
-/**
- * Knight Bot - A WhatsApp Bot
- * Copyright (c) 2026 Dev ABOODI
- * 
- * This program is free software: you can redistribute it and/or modify
- * under the terms of the MIT License.
- * 
- * Credits:
- * - Baileys Library by @adiwajshing
- * - System developed and modified by Dev ABOODI
- */
+const fs = require('fs');
+const path = require('path');
+const settings = require('../settings');
 
-require('./settings')
-
-const { Boom } = require('@hapi/boom')
-const fs = require('fs')
-const chalk = require('chalk')
-const FileType = require('file-type')
-const path = require('path')
-const axios = require('axios')
-const { handleMessages, handleGroupParticipantUpdate, handleStatus } = require('./main');
-const PhoneNumber = require('awesome-phonenumber')
-const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif')
-const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetch, sleep, reSize } = require('./lib/myfunc')
-
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    generateForwardMessageContent,
-    prepareWAMessageMedia,
-    generateWAMessageFromContent,
-    generateMessageID,
-    downloadContentFromMessage,
-    jidDecode,
-    proto,
-    jidNormalizedUser,
-    makeCacheableSignalKeyStore,
-    delay
-} = require("@whiskeysockets/baileys")
-
-const NodeCache = require("node-cache")
-const pino = require("pino")
-const readline = require("readline")
-
-const store = require('./lib/lightweight_store')
-
-store.readFromFile()
-
-const settings = require('./settings')
-
-setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000)
-
-// ================== OWNER DATA ==================
-const OWNER_NAME = "Dev ABOODI"
-const OWNER_NUMBER = "249112727808"
-const BOT_NUMBER = "249113388050"
-
-// ================== GLOBAL BOT INFO ==================
-global.botname = "KNIGHT BOT"
-global.themeemoji = "•"
-
-let phoneNumber = BOT_NUMBER
-let owner = OWNER_NUMBER
-
-const pairingCode = !!phoneNumber || process.argv.includes("--pairing-code")
-const useMobile = process.argv.includes("--mobile")
-
-const rl = process.stdin.isTTY
-    ? readline.createInterface({ input: process.stdin, output: process.stdout })
-    : null
-
-const question = (text) => {
-    if (rl) {
-        return new Promise(resolve => rl.question(text, resolve))
-    } else {
-        return Promise.resolve(phoneNumber)
-    }
-}
-
-// ================== START BOT FUNCTION ==================
-async function startXeonBotInc() {
+// =====================================================
+// LOAD DATA
+// =====================================================
+function loadUserGroupData() {
     try {
-        let { version } = await fetchLatestBaileysVersion()
-        const { state, saveCreds } = await useMultiFileAuthState(`./session`)
-        const msgRetryCounterCache = new NodeCache()
+        const dataPath = path.join(__dirname, '../data/userGroupData.json');
 
-        const sock = makeWASocket({
-            version,
-            logger: pino({ level: 'silent' }),
-            printQRInTerminal: !pairingCode,
-            browser: ["Ubuntu", "Chrome", "20.0.04"],
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
-            },
-            markOnlineOnConnect: true,
-            getMessage: async (key) => {
-                let jid = jidNormalizedUser(key.remoteJid)
-                let msg = await store.loadMessage(jid, key.id)
-                return msg?.message || ""
-            },
-            msgRetryCounterCache
-        })
+        if (!fs.existsSync(dataPath)) {
+            const defaultData = {
+                antibadword: {},
+                antilink: {},
+                welcome: {},
+                goodbye: {},
+                chatbot: {},
+                warnings: {},
+                sudo: [],
+                subowners: [] // 🆕 Sub Owners
+            };
 
-        sock.ev.on('creds.update', saveCreds)
-        store.bind(sock.ev)
+            fs.writeFileSync(dataPath, JSON.stringify(defaultData, null, 2));
+            return defaultData;
+        }
 
-        // ================== MESSAGE HANDLER ==================
-        sock.ev.on('messages.upsert', async chatUpdate => {
-            const mek = chatUpdate.messages[0]
-            if (!mek.message) return
+        const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
-            try {
-                await handleMessages(sock, chatUpdate, true)
-            } catch (err) {
-                console.error(err)
-            }
-        })
+        // ضمان وجود الحقول
+        if (!data.sudo) data.sudo = [];
+        if (!data.subowners) data.subowners = [];
 
-        // ================== CONNECTION HANDLER ==================
-        sock.ev.on('connection.update', async (update) => {
-            const { connection } = update
-
-            if (connection === "open") {
-                console.log(chalk.green(`\n==============================`))
-                console.log(chalk.green(`✔ BOT CONNECTED SUCCESSFULLY`))
-                console.log(chalk.green(`==============================`))
-
-                console.log(chalk.yellow(`BOT NAME   : ${global.botname}`))
-                console.log(chalk.yellow(`OWNER NAME : ${OWNER_NAME}`))
-                console.log(chalk.yellow(`OWNER NUM  : ${OWNER_NUMBER}`))
-                console.log(chalk.yellow(`BOT NUM    : ${BOT_NUMBER}`))
-                console.log(chalk.green(`STATUS     : ONLINE`))
-            }
-
-            if (connection === "close") {
-                console.log(chalk.red(`Connection closed. Restarting...`))
-                startXeonBotInc()
-            }
-        })
-
-        return sock
+        return data;
 
     } catch (error) {
-        console.error("Error:", error)
-        setTimeout(startXeonBotInc, 5000)
+        console.error('Error loading user group data:', error);
+        return {
+            antibadword: {},
+            antilink: {},
+            welcome: {},
+            goodbye: {},
+            chatbot: {},
+            warnings: {},
+            sudo: [],
+            subowners: []
+        };
     }
 }
 
-// ================== START ==================
-startXeonBotInc()
+// =====================================================
+// SAVE DATA
+// =====================================================
+function saveUserGroupData(data) {
+    try {
+        const dataPath = path.join(__dirname, '../data/userGroupData.json');
 
-// ================== ERROR HANDLING ==================
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err)
-})
+        const dir = path.dirname(dataPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
 
-process.on('unhandledRejection', (err) => {
-    console.error('Unhandled Rejection:', err)
-})
+        fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+        return true;
 
-// ================== AUTO RELOAD ==================
-let file = require.resolve(__filename)
-fs.watchFile(file, () => {
-    fs.unwatchFile(file)
-    delete require.cache[file]
-    require(file)
-})
+    } catch (error) {
+        console.error('Error saving user group data:', error);
+        return false;
+    }
+}
+
+// =====================================================
+// OWNER SYSTEM
+// =====================================================
+
+// 👑 Owner (المالك الأساسي)
+function isOwner(userId) {
+    try {
+        const ownerNumber = settings.ownerNumber;
+        return userId === ownerNumber || userId.includes(ownerNumber);
+    } catch (e) {
+        return false;
+    }
+}
+
+// 👥 Sub Owner check
+async function isSubOwner(userId) {
+    try {
+        const data = loadUserGroupData();
+        return data.subowners.includes(userId);
+    } catch (error) {
+        console.error('Error checking subowner:', error);
+        return false;
+    }
+}
+
+// ➕ Add Sub Owner
+async function addSubOwner(userId) {
+    try {
+        const data = loadUserGroupData();
+
+        if (!data.subowners.includes(userId)) {
+            data.subowners.push(userId);
+            saveUserGroupData(data);
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Error adding subowner:', error);
+        return false;
+    }
+}
+
+// ➖ Remove Sub Owner
+async function removeSubOwner(userId) {
+    try {
+        const data = loadUserGroupData();
+
+        const index = data.subowners.indexOf(userId);
+        if (index !== -1) {
+            data.subowners.splice(index, 1);
+            saveUserGroupData(data);
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Error removing subowner:', error);
+        return false;
+    }
+}
+
+// 📋 Get Sub Owners List
+async function getSubOwners() {
+    try {
+        const data = loadUserGroupData();
+        return data.subowners;
+    } catch (error) {
+        return [];
+    }
+}
+
+// =====================================================
+// ANTILINK
+// =====================================================
+async function setAntilink(groupId, type, action) {
+    try {
+        const data = loadUserGroupData();
+
+        if (!data.antilink) data.antilink = {};
+        if (!data.antilink[groupId]) data.antilink[groupId] = {};
+
+        data.antilink[groupId] = {
+            enabled: type === 'on',
+            action: action || 'delete'
+        };
+
+        saveUserGroupData(data);
+        return true;
+
+    } catch (error) {
+        console.error(error);
+        return false;
+    }
+}
+
+async function getAntilink(groupId, type) {
+    try {
+        const data = loadUserGroupData();
+
+        if (!data.antilink || !data.antilink[groupId]) return null;
+
+        return type === 'on' ? data.antilink[groupId] : null;
+
+    } catch (error) {
+        return null;
+    }
+}
+
+async function removeAntilink(groupId) {
+    try {
+        const data = loadUserGroupData();
+
+        if (data.antilink && data.antilink[groupId]) {
+            delete data.antilink[groupId];
+            saveUserGroupData(data);
+        }
+
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+// =====================================================
+// SUDO SYSTEM
+// =====================================================
+async function isSudo(userId) {
+    try {
+        const data = loadUserGroupData();
+        return data.sudo.includes(userId);
+    } catch (error) {
+        return false;
+    }
+}
+
+async function addSudo(userId) {
+    try {
+        const data = loadUserGroupData();
+
+        if (!data.sudo.includes(userId)) {
+            data.sudo.push(userId);
+            saveUserGroupData(data);
+        }
+
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+async function removeSudo(userId) {
+    try {
+        const data = loadUserGroupData();
+
+        const index = data.sudo.indexOf(userId);
+        if (index !== -1) {
+            data.sudo.splice(index, 1);
+            saveUserGroupData(data);
+        }
+
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+async function getSudoList() {
+    try {
+        const data = loadUserGroupData();
+        return data.sudo;
+    } catch (error) {
+        return [];
+    }
+}
+
+// =====================================================
+// EXPORTS
+// =====================================================
+module.exports = {
+    // Owner System
+    isOwner,
+    isSubOwner,
+    addSubOwner,
+    removeSubOwner,
+    getSubOwners,
+
+    // Sudo
+    isSudo,
+    addSudo,
+    removeSudo,
+    getSudoList,
+
+    // Antilink
+    setAntilink,
+    getAntilink,
+    removeAntilink
+};
